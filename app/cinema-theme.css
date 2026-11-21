@@ -728,3 +728,10 @@ html.trailer-transition::view-transition-new(trailer-details) { animation: trail
 }
 /* Quick-look sheet: "Similar to …" gets its own line (two at most), never a dangling "·". */
 @media (max-width: 650px) { .peek-copy .peek-similar { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; } }
+
+/* ── Map physics ───────────────────────────────────────────────────
+   The canvas hook springs --lean-x/--lean-y (and --lift) on the layer; each poster trails by its own
+   --depth, so the map has a little weight and bounce as you drag and fling it. The lines follow along. */
+.similarity-map .movie-card { translate: calc(var(--lean-x, 0px) * var(--depth, 1)) calc(var(--lean-y, 0px) * var(--depth, 1)); scale: var(--lift, 1); }
+.similarity-map .similarity-links, .similarity-map .similarity-labels { translate: calc(var(--lean-x, 0px) * .85) calc(var(--lean-y, 0px) * .85); }
+@media (prefers-reduced-motion: reduce) { .similarity-map .movie-card, .similarity-map .similarity-links, .similarity-map .similarity-labels { translate: none; scale: none; } }

@@ -448,6 +448,8 @@ const POSTER_VERSION = `${GENRES.length}-${CATEGORIES.map((category) => category
 const SEARCH_SUGGESTIONS = ["Arrival", "Severance", "Spirited Away", "The Bear", "Parasite", "Past Lives", "Dark", "Mad Max: Fury Road"] as const;
 const MAP_TILE = 4400;
 const MAP_ZOOM = .72;
+const ZOOM_MIN = .35;
+const ZOOM_MAX = 1.25;
 // Phones start further out so the whole first ring of matches fits on screen (pinch to get closer).
 const PHONE_MAP_ZOOM = .4;
 // The category wall starts smaller on phones too: two whole columns (each 220 wide, 380 apart = 600 in all)
@@ -467,7 +469,11 @@ function useInfiniteCanvas(mapMode = false) {
   const zoom = useRef(mapMode ? MAP_ZOOM : 1);
   const camera = useRef({ x: -680, y: -430 });
   const pointer = useRef({ id: -1, x: 0, y: 0, time: 0 });
+  // Camera velocity in canvas units per millisecond (used for the fling after you let go).
   const velocity = useRef({ x: 0, y: 0 });
+  // Recent finger/mouse positions (screen px), so the fling uses the real speed of the last ~100ms
+  // rather than the last tiny step — which is often near zero on a phone.
+  const samples = useRef<Array<{ t: number; x: number; y: number }>>([]);
   const frame = useRef<number | null>(null);
   const wheelTarget = useRef<{ x: number; y: number } | null>(null);
   const moved = useRef(false);
@@ -515,28 +521,98 @@ function useInfiniteCanvas(mapMode = false) {
     wheelTarget.current = null;
   }, []);
 
+  // ── Springy posters ──────────────────────────────────────────────
+  // While the map moves, posters trail slightly behind it (outer ones more than the centre, via each
+  // card's --depth), then spring back with a little overshoot when it settles. One spring drives a pair
+  // of CSS variables on the layer, so it's cheap: no per-card work in JavaScript.
+  const lean = useRef({ x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0, lift: 1, liftV: 0, liftT: 1 });
+  const leanFrame = useRef<number | null>(null);
+  const writeLean = useCallback(() => {
+    const layer = layerRef.current;
+    if (!layer) return;
+    layer.style.setProperty("--lean-x", `${(lean.current.x / zoom.current).toFixed(2)}px`);
+    layer.style.setProperty("--lean-y", `${(lean.current.y / zoom.current).toFixed(2)}px`);
+    layer.style.setProperty("--lift", lean.current.lift.toFixed(4));
+  }, []);
+  const runSpring = useCallback(() => {
+    if (leanFrame.current !== null) return;
+    let last = performance.now();
+    const step = (now: number) => {
+      const dt = Math.min(32, now - last) / 1000;
+      last = now;
+      const state = lean.current;
+      // Slightly under-damped spring: settles in ~0.4s with a small, natural bounce.
+      const stiffness = 210;
+      const damping = 17;
+      state.vx += ((state.tx - state.x) * stiffness - state.vx * damping) * dt;
+      state.vy += ((state.ty - state.y) * stiffness - state.vy * damping) * dt;
+      state.x += state.vx * dt;
+      state.y += state.vy * dt;
+      state.liftV += ((state.liftT - state.lift) * 320 - state.liftV * 20) * dt;
+      state.lift += state.liftV * dt;
+      const resting = !state.tx && !state.ty && state.liftT === 1
+        && Math.abs(state.x) + Math.abs(state.y) < .05 && Math.abs(state.vx) + Math.abs(state.vy) < .5
+        && Math.abs(state.lift - 1) < .0005 && Math.abs(state.liftV) < .005;
+      if (resting) { Object.assign(state, { x: 0, y: 0, vx: 0, vy: 0, lift: 1, liftV: 0 }); writeLean(); leanFrame.current = null; return; }
+      writeLean();
+      leanFrame.current = requestAnimationFrame(step);
+    };
+    leanFrame.current = requestAnimationFrame(step);
+  }, [writeLean]);
+  /** Point the spring at a screen velocity (px per ms); 0,0 lets the posters settle home. */
+  const leanToward = useCallback((screenVx: number, screenVy: number) => {
+    if (!mapMode || reducedMotion.current) return;
+    const limit = 26;
+    lean.current.tx = Math.max(-limit, Math.min(limit, -screenVx * 16));
+    lean.current.ty = Math.max(-limit, Math.min(limit, -screenVy * 16));
+    runSpring();
+  }, [mapMode, runSpring]);
+  /** Posters dip very slightly while the map is held, and spring back up when it's let go. */
+  const liftPosters = useCallback((held: boolean) => {
+    if (!mapMode || reducedMotion.current) return;
+    lean.current.liftT = held ? .975 : 1;
+    runSpring();
+  }, [mapMode, runSpring]);
+  useEffect(() => () => { if (leanFrame.current !== null) cancelAnimationFrame(leanFrame.current); }, []);
+
+  // After a drag: glide on with the release speed and ease to a stop. Friction is per millisecond (not
+  // per frame), so the glide feels the same on 60 Hz and 120 Hz screens.
   const coast = useCallback(() => {
     stopFrame();
     if (reducedMotion.current) return;
-    const tick = () => {
-      velocity.current.x *= .92;
-      velocity.current.y *= .92;
-      camera.current.x += velocity.current.x;
-      camera.current.y += velocity.current.y;
+    const friction = .9965;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(40, now - last);
+      last = now;
+      camera.current.x += velocity.current.x * dt;
+      camera.current.y += velocity.current.y * dt;
+      const decay = Math.pow(friction, dt);
+      velocity.current.x *= decay;
+      velocity.current.y *= decay;
       paint();
-      if (Math.abs(velocity.current.x) + Math.abs(velocity.current.y) > .4) frame.current = requestAnimationFrame(tick);
-      else frame.current = null;
+      const screenSpeed = Math.hypot(velocity.current.x, velocity.current.y) * zoom.current;
+      leanToward(velocity.current.x * zoom.current, velocity.current.y * zoom.current);
+      if (screenSpeed > .02) frame.current = requestAnimationFrame(tick);
+      else { frame.current = null; leanToward(0, 0); }
     };
     frame.current = requestAnimationFrame(tick);
-  }, [paint, stopFrame]);
+  }, [paint, stopFrame, leanToward]);
 
   const centerCamera = useCallback(() => {
     camera.current = { x: window.innerWidth / (2 * zoom.current) - tileWidth / 2, y: (window.innerHeight / 2 + 30) / zoom.current - tileHeight / 2 };
   }, [tileWidth, tileHeight]);
 
   // Zoom toward a point on screen, keeping whatever is under that point in place.
-  const zoomAt = useCallback((screenX: number, screenY: number, nextZoom: number) => {
-    const clamped = Math.max(.35, Math.min(1.25, nextZoom));
+  const zoomAt = useCallback((screenX: number, screenY: number, nextZoom: number, soft = false) => {
+    // `soft` (while pinching): past the limits the zoom keeps going with heavy resistance, like a rubber
+    // band, and springs back when the fingers lift (see finishPointer).
+    if (!Number.isFinite(nextZoom) || nextZoom <= 0) return;
+    const stretched = nextZoom < ZOOM_MIN ? ZOOM_MIN * Math.pow(nextZoom / ZOOM_MIN, .3) : nextZoom > ZOOM_MAX ? ZOOM_MAX * Math.pow(nextZoom / ZOOM_MAX, .3) : nextZoom;
+    // The rubber band never stretches past half the minimum or 1.5× the maximum.
+    const clamped = soft
+      ? Math.max(ZOOM_MIN * .5, Math.min(ZOOM_MAX * 1.5, stretched))
+      : Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, nextZoom));
     camera.current = {
       x: screenX / clamped - (screenX / zoom.current - camera.current.x),
       y: screenY / clamped - (screenY / zoom.current - camera.current.y),
@@ -611,10 +687,21 @@ function useInfiniteCanvas(mapMode = false) {
 
   // Two fingers on a touch screen pinch-zoom the map around the point between them.
   const touches = useRef(new Map<number, { x: number; y: number }>());
-  const pinch = useRef<{ distance: number; zoom: number } | null>(null);
+  const pinch = useRef<{ distance: number; zoom: number; x: number; y: number } | null>(null);
   const touchSpread = () => {
     const [a, b] = [...touches.current.values()];
     return { distance: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  };
+
+  /** Screen speed (px per ms) over the last `span` ms of the drag. */
+  const recentSpeed = (span: number) => {
+    const list = samples.current;
+    const last = list.at(-1);
+    if (!last || list.length < 2) return { x: 0, y: 0 };
+    const first = list.find((sample) => last.t - sample.t <= span) ?? list[0];
+    const elapsed = last.t - first.t;
+    if (elapsed < 8) return { x: 0, y: 0 };
+    return { x: (last.x - first.x) / elapsed, y: (last.y - first.y) / elapsed };
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -623,7 +710,8 @@ function useInfiniteCanvas(mapMode = false) {
       touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (mapMode && touches.current.size === 2) {
         stopFrame();
-        pinch.current = { distance: Math.max(1, touchSpread().distance), zoom: zoom.current };
+        const spread = touchSpread();
+        pinch.current = { distance: Math.max(1, spread.distance), zoom: zoom.current, x: spread.x, y: spread.y };
         pointer.current.id = -1;
         moved.current = true;
         try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
@@ -636,6 +724,7 @@ function useInfiniteCanvas(mapMode = false) {
     moved.current = false;
     pointer.current = { id: event.pointerId, x: event.clientX, y: event.clientY, time: performance.now() };
     velocity.current = { x: 0, y: 0 };
+    samples.current = [{ t: pointer.current.time, x: event.clientX, y: event.clientY }];
     if (!startedOnControl) {
       try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
       setDragging(true);
@@ -646,30 +735,52 @@ function useInfiniteCanvas(mapMode = false) {
     if (touches.current.has(event.pointerId)) touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pinch.current && touches.current.size >= 2) {
       const spread = touchSpread();
-      zoomAt(spread.x, spread.y, pinch.current.zoom * spread.distance / pinch.current.distance);
+      pinch.current.x = spread.x;
+      pinch.current.y = spread.y;
+      zoomAt(spread.x, spread.y, pinch.current.zoom * Math.max(1, spread.distance) / pinch.current.distance, true);
       return;
     }
     if (pointer.current.id !== event.pointerId) return;
     const now = performance.now();
     const dx = (event.clientX - pointer.current.x) / zoom.current;
     const dy = (event.clientY - pointer.current.y) / zoom.current;
-    const dt = Math.max(8, now - pointer.current.time);
+    samples.current.push({ t: now, x: event.clientX, y: event.clientY });
+    while (samples.current.length > 2 && now - samples.current[0].t > 120) samples.current.shift();
     if (Math.abs(dx) + Math.abs(dy) > 3) {
+      if (!moved.current) liftPosters(true);
       moved.current = true;
       try { if (!event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
       setDragging(true);
     }
     camera.current.x += dx;
     camera.current.y += dy;
-    velocity.current = { x: (dx / dt) * 16, y: (dy / dt) * 16 };
     pointer.current = { id: event.pointerId, x: event.clientX, y: event.clientY, time: now };
     paint();
+    if (moved.current) { const speed = recentSpeed(60); leanToward(speed.x, speed.y); }
   };
 
   const finishPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
     touches.current.delete(event.pointerId);
     if (pinch.current) {
-      if (touches.current.size < 2) { pinch.current = null; setDragging(false); }
+      if (touches.current.size < 2) {
+        const { x, y } = pinch.current;
+        pinch.current = null;
+        setDragging(false);
+        // Stretched past a limit: ease back to it around the same point.
+        const target = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom.current));
+        if (target !== zoom.current) {
+          stopFrame();
+          let last = performance.now();
+          const settle = (now: number) => {
+            const ease = 1 - Math.exp(-Math.min(40, now - last) / 70);
+            last = now;
+            const next = zoom.current + (target - zoom.current) * ease;
+            zoomAt(x, y, Math.abs(next - target) < .002 ? target : next, true);
+            frame.current = zoom.current === target ? null : requestAnimationFrame(settle);
+          };
+          frame.current = requestAnimationFrame(settle);
+        }
+      }
       try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* already released */ }
       return;
     }
@@ -677,6 +788,15 @@ function useInfiniteCanvas(mapMode = false) {
     pointer.current.id = -1;
     setDragging(false);
     try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* pointer already released */ }
+    if (!moved.current) return;
+    liftPosters(false);
+    // Fling with the speed of the last ~100ms. A finger that paused before lifting doesn't fling.
+    const speed = performance.now() - (samples.current.at(-1)?.t ?? 0) > 60 ? { x: 0, y: 0 } : recentSpeed(100);
+    const cap = 4.5;
+    const magnitude = Math.hypot(speed.x, speed.y);
+    const scale = magnitude > cap ? cap / magnitude : 1;
+    velocity.current = { x: speed.x * scale / zoom.current, y: speed.y * scale / zoom.current };
+    if (magnitude < .05) { leanToward(0, 0); return; }
     coast();
   };
 
@@ -832,6 +952,7 @@ function MovieCardButton({
   flipDelay,
   eagerPoster = false,
   saved = false,
+  depth,
   className = "",
 }: {
   movie: MovieCard;
@@ -849,6 +970,8 @@ function MovieCardButton({
   eagerPoster?: boolean;
   /** Marked with a small bookmark when it's in the Saved list. */
   saved?: boolean;
+  /** How strongly this poster trails the map while it moves (centre least, outer orbit most). */
+  depth?: number;
   className?: string;
 }) {
   const runtime = movie.runtime ? formatRuntime(movie) : null;
@@ -866,7 +989,7 @@ function MovieCardButton({
         const bounds = (poster ?? event.currentTarget).getBoundingClientRect();
         onOpen(movie, { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height }, event.currentTarget);
       }}
-      style={{ left: position.x, top: position.y, width: position.width, "--card-rotate": `${position.rotate}deg`, viewTransitionName: entryHero ? "genre-selection" : undefined, ...(enter ? { "--from-x": `${enter.x}px`, "--from-y": `${enter.y}px`, "--enter-delay": `${enter.delay}ms` } : {}), ...(flipDelay !== undefined ? { "--flip-delay": `${flipDelay}ms` } : {}) } as CSSProperties}
+      style={{ left: position.x, top: position.y, width: position.width, "--card-rotate": `${position.rotate}deg`, viewTransitionName: entryHero ? "genre-selection" : undefined, ...(enter ? { "--from-x": `${enter.x}px`, "--from-y": `${enter.y}px`, "--enter-delay": `${enter.delay}ms` } : {}), ...(flipDelay !== undefined ? { "--flip-delay": `${flipDelay}ms` } : {}), ...(depth !== undefined ? { "--depth": depth } : {}) } as CSSProperties}
       tabIndex={clone ? -1 : 0}
       type="button"
     >
@@ -1769,6 +1892,7 @@ function CanvasScreen({
                       entryHero={entryTransition && tileIndex === 4 && index === 0}
                       eagerPoster={!mapMode && tileIndex === 4}
                       saved={savedKeys.has(titleKey(movie))}
+                      depth={mapMode ? (index === 0 ? .35 : movie.orbit ? 1.6 : .85 + Math.floor((index - 1) / 5) * .25) : undefined}
                       flipDelay={!mapMode && tileIndex === 4 ? index * 55 : undefined}
                       key={`${tileIndex}-${movie.mediaType}-${movie.id}`}
                       movie={movie}
