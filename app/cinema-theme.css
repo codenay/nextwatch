@@ -595,3 +595,13 @@ html.trailer-transition::view-transition-new(trailer-details) { animation: trail
 
 /* Phones show the credits button as an icon only; drop the label so it can't nudge the icon off-centre. */
 @media (max-width: 650px) { .credits-button .credits-label { display: none; } .credits-button { gap: 0; } }
+
+/* Phones: a 12px gap between the header buttons and the search box (or the category summary), with
+   everything underneath moved down by the same 10px so the spacing below stays as it was. */
+@media (max-width: 650px) {
+  .home-search, .taste-summary { top: calc(4.5rem + env(safe-area-inset-top)); }
+  .credits-button { top: calc(7.775rem + env(safe-area-inset-top)); }
+  .map-legend.home-legend, .similarity-map .credits-button { top: calc(8.5rem + env(safe-area-inset-top)); }
+  .category-tabs { top: calc(7.375rem + env(safe-area-inset-top)); }
+  .browse-panel { padding-top: calc(8.875rem + env(safe-area-inset-top)); }
+}
