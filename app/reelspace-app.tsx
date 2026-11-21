@@ -449,7 +449,14 @@ const MAP_TILE = 4400;
 const MAP_ZOOM = .72;
 // Phones start further out so the whole first ring of matches fits on screen (pinch to get closer).
 const PHONE_MAP_ZOOM = .4;
-const startZoom = () => window.matchMedia("(max-width: 650px)").matches ? PHONE_MAP_ZOOM : MAP_ZOOM;
+// The category wall starts smaller on phones too: two whole columns (each 220 wide, 380 apart = 600 in all)
+// fit between 16px edges, so a few posters show at once instead of one big card.
+const phoneWallZoom = () => Math.min(.6, (window.innerWidth - 32) / 600);
+const startZoom = (mapMode = true) => {
+  const phone = window.matchMedia("(max-width: 650px)").matches;
+  if (mapMode) return phone ? PHONE_MAP_ZOOM : MAP_ZOOM;
+  return phone ? phoneWallZoom() : 1;
+};
 
 function useInfiniteCanvas(mapMode = false) {
   const tileWidth = mapMode ? MAP_TILE : TILE_WIDTH;
@@ -534,7 +541,15 @@ function useInfiniteCanvas(mapMode = false) {
     const update = () => { reducedMotion.current = preference.matches; if (preference.matches) stopFrame(); };
     update();
     preference.addEventListener("change", update);
-    if (mapMode) { zoom.current = startZoom(); centerCamera(); }
+    zoom.current = startZoom(mapMode);
+    if (mapMode) centerCamera();
+    else if (zoom.current < 1) {
+      // Phone wall: two whole columns centred across the screen, first row just under the category pills.
+      // Columns start at x = 100 and repeat every 380 (cards are 220 wide); rows start at y = 100.
+      const z = zoom.current;
+      const left = (window.innerWidth - (380 + 220) * z) / 2;
+      camera.current = { x: left / z - 100, y: 184 / z - 100 };
+    }
     paint();
     return () => { stopFrame(); preference.removeEventListener("change", update); };
   }, [paint, stopFrame, mapMode, centerCamera]);
@@ -1409,7 +1424,7 @@ function CanvasScreen({
           <div className="taste-summary">{mapSeed ? <span>THE WORLD AROUND {mapSeed.title}</span> : <><span>{category?.name ?? genreSummary}</span><i /> <span>{moodSummary}</span><i /> <span>{selectedContentType === "movie" ? "Movies" : selectedContentType === "tv" ? "Series" : "Movies + Series"}</span></>}</div>
           <div className="header-actions">
             <SavedButton />
-            <button onClick={onChangeTaste} type="button"><LayoutGrid aria-hidden="true" /> All categories</button>
+            <button aria-label="All categories" onClick={onChangeTaste} type="button"><LayoutGrid aria-hidden="true" /><span className="header-label">All categories</span></button>
           </div>
         </header>
       )}

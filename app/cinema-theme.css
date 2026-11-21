@@ -605,3 +605,6 @@ html.trailer-transition::view-transition-new(trailer-details) { animation: trail
   .category-tabs { top: calc(7.375rem + env(safe-area-inset-top)); }
   .browse-panel { padding-top: calc(8.875rem + env(safe-area-inset-top)); }
 }
+
+/* Phones: header buttons are icon-only; drop their text so the icon sits dead centre. */
+@media (max-width: 650px) { .canvas-header .header-actions > button { gap: 0; } .canvas-header .header-label { display: none; } }
