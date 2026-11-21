@@ -1294,7 +1294,8 @@ function PeekSheet({ movie, seedTitle, onClose, onOpenMap, onDetails }: {
           <div className="peek-copy">
             <h2>{movie.title}</h2>
             <p>{[movie.mediaType === "tv" ? "Series" : "Movie", movie.year, movie.genres[0], runtime].filter((part) => part && part !== "—").join(" · ")}</p>
-            <p><Star aria-hidden="true" /> {movie.rating || "New"}{seedTitle ? <span> · Similar to {seedTitle}</span> : null}</p>
+            <p><Star aria-hidden="true" /> {movie.rating || "New"}</p>
+            {seedTitle ? <p className="peek-similar">Similar to {seedTitle}</p> : null}
           </div>
         </div>
         <div className="peek-actions">

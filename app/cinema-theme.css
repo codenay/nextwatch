@@ -726,3 +726,5 @@ html.trailer-transition::view-transition-new(trailer-details) { animation: trail
   .site-header.canvas-header { min-height: calc(4.25rem + env(safe-area-inset-top)); padding-bottom: .5rem; background: linear-gradient(#101012 0 70%, transparent); }
   .browse-panel { padding-top: calc(5.25rem + env(safe-area-inset-top)); }
 }
+/* Quick-look sheet: "Similar to …" gets its own line (two at most), never a dangling "·". */
+@media (max-width: 650px) { .peek-copy .peek-similar { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; } }
