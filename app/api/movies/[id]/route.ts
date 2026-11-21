@@ -5,7 +5,8 @@ import type { MediaType } from "@/lib/reelspace";
 // (set by the host when available), else the region in their browser language, else the US.
 function viewerRegion(request: Request, requested: string | null) {
   if (requested && /^[A-Z]{2}$/.test(requested)) return requested;
-  const fromHost = request.headers.get("cf-ipcountry")?.toUpperCase();
+  // Cloudflare and Vercel each tell us the visitor's country in their own header.
+  const fromHost = (request.headers.get("cf-ipcountry") ?? request.headers.get("x-vercel-ip-country"))?.toUpperCase();
   if (fromHost && /^[A-Z]{2}$/.test(fromHost) && fromHost !== "XX" && fromHost !== "T1") return fromHost;
   const fromLanguage = request.headers.get("accept-language")?.match(/[a-z]{2,3}-([A-Z]{2})/)?.[1];
   return fromLanguage ?? "US";
