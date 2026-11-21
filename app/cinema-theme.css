@@ -560,3 +560,35 @@ html.trailer-transition::view-transition-new(trailer-details) { animation: trail
 @keyframes unavailable-in { from { opacity: 0; transform: translateY(12px); } }
 @media (prefers-reduced-motion: reduce) { .unavailable-reel span, .unavailable-body { animation: none; } }
 .saved-dialog [data-slot="dialog-header"] { text-align: left; }
+
+/* ── Phones: one centered row of map controls along the bottom ──────
+   [← Back] [Trending] [Shuffle] [◎] sit together just above the home indicator. The ◎ button replaces
+   the corner zoom bar on phones (pinch zooms). Credits becomes a round button on the info row. */
+.narrow-only { display: none; }
+.map-controls-row { display: contents; }
+.center-map-phone { display: none; }
+@media (max-width: 650px) {
+  .narrow-only { display: inline; }
+  .similarity-map .map-controls-row {
+    position: fixed; z-index: 25; left: 50%; transform: translateX(-50%);
+    bottom: calc(1rem + env(safe-area-inset-bottom));
+    display: flex; align-items: center; gap: .4rem; max-width: calc(100vw - 2rem);
+  }
+  .similarity-map .map-controls-row .discovery-tools { position: static; transform: none; max-width: none; width: auto; min-width: 0; }
+  .similarity-map .discovery-tools button { min-height: 38px; min-width: 0; flex-shrink: 1; padding-inline: .8rem; }
+  .similarity-map .discovery-tools:empty { display: none; }
+  .similarity-map .center-map-phone, .similarity-map .credits-button {
+    display: grid; place-items: center; flex-shrink: 0; width: 38px; height: 38px; min-height: 38px; padding: 0;
+    border: 1px solid var(--nw-border); border-radius: 50%; background: #2c2c2edb; color: #f5f5f7;
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); cursor: pointer;
+  }
+  .similarity-map .center-map-phone svg { width: 1.05rem; height: 1.05rem; }
+  .similarity-map .credits-button svg { width: .95rem; height: .95rem; }
+  .similarity-map .center-map-phone:active { transform: scale(.94); }
+  .similarity-map .map-view-tools { display: none; }
+  .similarity-map .credits-button { position: fixed; top: calc(7.9rem + env(safe-area-inset-top)); bottom: auto; right: max(1rem, env(safe-area-inset-right)); }
+  .similarity-map .move-hint { bottom: calc(4.1rem + env(safe-area-inset-bottom)); }
+  /* The info row: map label on the left, ⓘ on the right, same height and the same 16px edges as the header. */
+  .map-legend.home-legend { left: max(1rem, env(safe-area-inset-left)); min-height: 32px; display: flex; align-items: center; }
+  .similarity-map .credits-button { top: calc(7.9rem + env(safe-area-inset-top)); width: 32px; height: 32px; min-height: 32px; }
+}

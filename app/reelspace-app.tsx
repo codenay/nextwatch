@@ -14,7 +14,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUpRight, Bookmark, BookmarkCheck, Brain, Heart, Info, LayoutGrid, Move, Orbit, Play, RotateCw, Shuffle, Sparkles, Star, TrendingUp, X, Zap } from "lucide-react";
+import { ArrowUpRight, Bookmark, BookmarkCheck, Brain, Heart, Info, LayoutGrid, LocateFixed, Move, Orbit, Play, RotateCw, Shuffle, Sparkles, Star, TrendingUp, X, Zap } from "lucide-react";
 
 import {
   Dialog,
@@ -447,6 +447,9 @@ const POSTER_VERSION = `${GENRES.length}-${CATEGORIES.map((category) => category
 const SEARCH_SUGGESTIONS = ["Arrival", "Severance", "Spirited Away", "The Bear", "Parasite", "Past Lives", "Dark", "Mad Max: Fury Road"] as const;
 const MAP_TILE = 4400;
 const MAP_ZOOM = .72;
+// Phones start further out so the whole first ring of matches fits on screen (pinch to get closer).
+const PHONE_MAP_ZOOM = .4;
+const startZoom = () => window.matchMedia("(max-width: 650px)").matches ? PHONE_MAP_ZOOM : MAP_ZOOM;
 
 function useInfiniteCanvas(mapMode = false) {
   const tileWidth = mapMode ? MAP_TILE : TILE_WIDTH;
@@ -531,7 +534,7 @@ function useInfiniteCanvas(mapMode = false) {
     const update = () => { reducedMotion.current = preference.matches; if (preference.matches) stopFrame(); };
     update();
     preference.addEventListener("change", update);
-    if (mapMode) centerCamera();
+    if (mapMode) { zoom.current = startZoom(); centerCamera(); }
     paint();
     return () => { stopFrame(); preference.removeEventListener("change", update); };
   }, [paint, stopFrame, mapMode, centerCamera]);
@@ -684,7 +687,7 @@ function useInfiniteCanvas(mapMode = false) {
   const changeZoom = (delta: number) => {
     stopFrame();
     if (delta) { zoomAt(window.innerWidth / 2, window.innerHeight / 2, zoom.current + delta); return; }
-    zoom.current = MAP_ZOOM;
+    zoom.current = startZoom();
     centerCamera();
     paint();
   };
@@ -1410,7 +1413,12 @@ function CanvasScreen({
           </div>
         </header>
       )}
-      {controls}
+      {/* On phones this row holds the bottom pills and a round "center map" button side by side;
+          on wider screens it's invisible (display: contents) and the zoom bar has its own corner. */}
+      <div className="map-controls-row">
+        {controls}
+        {mapSeed ? <button aria-label="Center map" className="center-map-phone" onClick={() => changeZoom(0)} title="Center map" type="button"><LocateFixed aria-hidden="true" /></button> : null}
+      </div>
       <div
         aria-label="Infinite movie and series recommendation canvas. Drag or use arrow keys to explore."
         className={`canvas-stage ${dragging ? "is-dragging" : ""}`}
@@ -1900,7 +1908,7 @@ export default function ReelspaceApp({ view = "home", initialPick = null }: {
     <>
       {phase === "canvas" ? <nav className="discovery-tools" aria-label="Title discovery">
         {mapHistory.length ? <button disabled={mapBusy} onClick={backMap} title={`Back to ${mapHistory.at(-1)?.seed?.title ?? "your picks"}`} type="button"><span className="discovery-label">← Back<span className="wide-only">{mapHistory.at(-1)?.seed ? ` to ${mapHistory.at(-1)?.seed?.title}` : " to your picks"}</span></span></button> : null}
-        {view === "home" && mapSeed && !isTrending && !pending ? <button disabled={mapBusy} onClick={() => { haptic(); void showTrending(true); }} type="button"><TrendingUp aria-hidden="true" /> What’s trending</button> : null}
+        {view === "home" && mapSeed && !isTrending && !pending ? <button disabled={mapBusy} onClick={() => { haptic(); void showTrending(true); }} type="button"><TrendingUp aria-hidden="true" /> <span><span className="wide-only">What’s trending</span><span className="narrow-only">Trending</span></span></button> : null}
         {view === "home" && mapSeed && configured && !pending ? <button aria-label="Shuffle to another trending title" className="shuffle-button" disabled={mapBusy} onClick={shuffleTrending} title="Another title from today’s top 20" type="button"><Shuffle aria-hidden="true" /> <span>Shuffle<span className="wide-only"> trending</span></span></button> : null}
       </nav> : null}
     </>
