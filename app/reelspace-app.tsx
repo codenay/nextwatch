@@ -1494,7 +1494,7 @@ function CanvasScreen({
       {mapSeed ? <div className="map-view-tools" aria-label="Map view controls"><button type="button" aria-label="Zoom out" onClick={() => changeZoom(-.15)}>−</button><button type="button" onClick={() => changeZoom(0)}>Center map</button><button type="button" aria-label="Zoom in" onClick={() => changeZoom(.15)}>+</button></div> : null}
       {loading ? <LoadingCaption lines={mapMode ? undefined : genreLines} title={movies[0]?.title} /> : null}
       <div aria-hidden={!showHint} className={`move-hint ${showHint ? "is-shown" : ""}`}><Move aria-hidden="true" /><span className="hint-touch">{mapMode ? "Drag to explore · pinch to zoom" : "Drag to explore"}</span><span className="hint-pointer">{mapMode ? "Drag or scroll to explore · pinch to zoom" : "Drag or scroll to explore"}</span></div>
-      <button aria-label="Open credits" className="credits-button" onClick={onOpenCredits} type="button"><Info aria-hidden="true" /> Credits</button>
+      <button aria-label="Open credits" className="credits-button" onClick={onOpenCredits} type="button"><Info aria-hidden="true" /><span className="credits-label">Credits</span></button>
     </main>
   );
 }

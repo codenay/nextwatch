@@ -592,3 +592,6 @@ html.trailer-transition::view-transition-new(trailer-details) { animation: trail
   .map-legend.home-legend { left: max(1rem, env(safe-area-inset-left)); min-height: 32px; display: flex; align-items: center; }
   .similarity-map .credits-button { top: calc(7.9rem + env(safe-area-inset-top)); width: 32px; height: 32px; min-height: 32px; }
 }
+
+/* Phones show the credits button as an icon only; drop the label so it can't nudge the icon off-centre. */
+@media (max-width: 650px) { .credits-button .credits-label { display: none; } .credits-button { gap: 0; } }
