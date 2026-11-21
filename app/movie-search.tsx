@@ -34,13 +34,17 @@ function useTypedSuggestion(suggestions: readonly string[] | undefined, active: 
   return active && suggestions?.length ? typed : null;
 }
 
-export function MovieSearch({ onSelect, contentType = "both", placeholder: customPlaceholder, suggestions, shortcut = false }: {
+export function MovieSearch({ onSelect, contentType = "both", placeholder: customPlaceholder, suggestions, shortcut = false, inputId = "movie-search" }: {
   onSelect: (movie: MovieCard) => void; contentType?: ContentType; placeholder?: string;
   /** Example titles typed into the empty field. */
   suggestions?: readonly string[];
   /** Press "/" anywhere to jump to the search box. */
   shortcut?: boolean;
+  /** Unique id for the input (and prefix for its results), so two search boxes can share a page. */
+  inputId?: string;
 }) {
+  const optionsId = `${inputId}-options`;
+  const optionId = (index: number) => `${inputId}-option-${index}`;
   const inputRef = useRef<HTMLInputElement>(null);
   const [focused, setFocused] = useState(false);
   const [query, setQuery] = useState("");
@@ -94,7 +98,7 @@ export function MovieSearch({ onSelect, contentType = "both", placeholder: custo
     if (!movies.length) return;
     const next = active < 0 ? (step > 0 ? 0 : movies.length - 1) : (active + step + movies.length) % movies.length;
     setActive(next);
-    listRef.current?.querySelector<HTMLElement>(`#search-option-${next}`)?.scrollIntoView({ block: "nearest" });
+    listRef.current?.querySelector<HTMLElement>(`#${optionId(next)}`)?.scrollIntoView({ block: "nearest" });
   };
   const onInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -113,11 +117,11 @@ export function MovieSearch({ onSelect, contentType = "both", placeholder: custo
   return <div className="inline-film-search" onFocus={() => setDismissed(false)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDismissed(true); }} onKeyDown={(event) => { if (event.key === "Escape") setDismissed(true); }} onInput={() => setDismissed(false)}>
     <div className="inline-search-field" role="search">
       <Search aria-hidden="true" />
-      <label className="sr-only" htmlFor="movie-search">Search movies and series</label>
+      <label className="sr-only" htmlFor={inputId}>Search movies and series</label>
       <input
-        id="movie-search" ref={inputRef} type="search" autoComplete="off" maxLength={80} placeholder={placeholder}
-        role="combobox" aria-autocomplete="list" aria-expanded={open && movies.length > 0} aria-controls="search-options"
-        aria-activedescendant={open && active >= 0 ? `search-option-${active}` : undefined}
+        id={inputId} ref={inputRef} type="search" autoComplete="off" maxLength={80} placeholder={placeholder}
+        role="combobox" aria-autocomplete="list" aria-expanded={open && movies.length > 0} aria-controls={optionsId}
+        aria-activedescendant={open && active >= 0 ? optionId(active) : undefined}
         aria-keyshortcuts={shortcut ? "/" : undefined} value={query}
         onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onKeyDown={onInputKeyDown}
         onChange={(event) => { setQuery(event.target.value); setMovies([]); setActive(-1); setError(""); setLoading(event.target.value.trim().length >= 2); }}
@@ -126,8 +130,8 @@ export function MovieSearch({ onSelect, contentType = "both", placeholder: custo
     </div>
       {open && <div className="movie-search-results inline-film-results" aria-busy={loading} ref={listRef}>
         <p role="status">{loading ? `Searching ${pluralNoun}…` : error || (query.trim().length < 2 ? "Type at least two characters to explore." : !movies.length ? `No ${pluralNoun} found. Try another title.` : `Choose a ${noun} to open its map.`)}</p>
-        <div id="search-options" role="listbox" aria-label="Search results" className="search-options">
-        {movies.map((movie, index) => <button aria-selected={index === active} className={`search-result ${index === active ? "is-active" : ""}`} id={`search-option-${index}`} key={`${movie.mediaType}-${movie.id}`} onClick={() => choose(movie)} onMouseEnter={() => setActive(index)} role="option" tabIndex={-1} type="button">
+        <div id={optionsId} role="listbox" aria-label="Search results" className="search-options">
+        {movies.map((movie, index) => <button aria-selected={index === active} className={`search-result ${index === active ? "is-active" : ""}`} id={optionId(index)} key={`${movie.mediaType}-${movie.id}`} onClick={() => choose(movie)} onMouseEnter={() => setActive(index)} role="option" tabIndex={-1} type="button">
           <span className="result-poster" aria-hidden="true" style={{ "--preview-palette": movie.palette } as CSSProperties}>
             {movie.posterUrl ? <Image src={movie.posterUrl.replace("/w780/", "/w185/")} alt="" fill sizes="40px" unoptimized /> : null}
           </span>

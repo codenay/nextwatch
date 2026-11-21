@@ -501,3 +501,39 @@ export async function getMovieDetail(id: number, mediaType: MediaType = "movie",
     };
   }
 }
+
+/**
+ * One page of the phone browse feed: plain discover results for a genre or category (no per-title
+ * lookups, so a page costs one request per media type). Movies and series are interleaved.
+ */
+export async function getBrowseFeedPage(pick: { genres?: number[]; category?: Category }, contentType: ContentType, page: number) {
+  if (!tmdbConfigured()) return { movies: [] as MovieCard[], hasMore: false };
+  const { category, genres = [] } = pick;
+  const mediaTypes: MediaType[] = category ? categoryMediaTypes(category, contentType) : contentType === "both" ? ["movie", "tv"] : [contentType];
+  const key = `feed:${category?.slug ?? genres.join("-")}:${contentType}:${page}`;
+  return cached(key, async () => {
+    const results = await Promise.allSettled(mediaTypes.map(async (mediaType) => {
+      const params = category
+        ? { ...categoryParams(category, mediaType), page }
+        : {
+            include_adult: false,
+            language: "en-US",
+            ...(mediaType === "movie" ? { include_video: false } : {}),
+            "vote_count.gte": 80,
+            sort_by: "popularity.desc",
+            with_genres: (mediaType === "tv" ? tvGenreIdsFor(genres) : genres).join("|"),
+            page,
+          };
+      return { mediaType, payload: await tmdbFetch<{ results?: TmdbListMovie[]; total_pages?: number }>(`/discover/${mediaType}`, params) };
+    }));
+    const lists = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    if (!lists.length) throw new Error("FEED_UNAVAILABLE");
+    const usable = lists.map(({ mediaType, payload }) => ({ mediaType, titles: (payload.results ?? []).filter((title) => title.poster_path && !title.adult) }));
+    const movies: MovieCard[] = [];
+    for (let index = 0; index < Math.max(...usable.map((list) => list.titles.length)); index += 1) {
+      usable.forEach(({ mediaType, titles }) => { if (titles[index]) movies.push(normalizeCard(titles[index] as TmdbMovie, [], mediaType)); });
+    }
+    const hasMore = page < 20 && lists.some(({ payload }) => (payload.total_pages ?? 0) > page);
+    return { movies, hasMore };
+  }, () => TRENDING_TTL);
+}

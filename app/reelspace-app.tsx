@@ -9,12 +9,13 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUpRight, Bookmark, BookmarkCheck, Brain, Heart, Info, LayoutGrid, LocateFixed, Move, Orbit, Play, RotateCw, Shuffle, Sparkles, Star, TrendingUp, X, Zap } from "lucide-react";
+import { ArrowUpRight, Bookmark, BookmarkCheck, Brain, Heart, Info, LayoutGrid, LocateFixed, Move, Orbit, Play, RotateCw, Search, Shuffle, Sparkles, Star, TrendingUp, X, Zap } from "lucide-react";
 
 import {
   Dialog,
@@ -472,6 +473,7 @@ function useInfiniteCanvas(mapMode = false) {
   const moved = useRef(false);
   const reducedMotion = useRef(false);
   const [dragging, setDragging] = useState(false);
+  const lastZoom = useRef(0);
 
   const paint = useCallback(() => {
     if (!layerRef.current) return;
@@ -480,6 +482,13 @@ function useInfiniteCanvas(mapMode = false) {
     const x = ((camera.current.x % tileWidth) + tileWidth) % tileWidth - tileWidth * 2;
     const y = ((camera.current.y % tileHeight) + tileHeight) % tileHeight - tileHeight * 2;
     layerRef.current.style.transform = `translate3d(${x * zoom.current}px, ${y * zoom.current}px, 0) scale(${zoom.current})`;
+    // Zoomed out, the map shows each poster with just its title, kept at a readable size on screen
+    // (the CSS divides by the zoom). Only touched when the zoom actually changes.
+    if (mapMode && lastZoom.current !== zoom.current) {
+      lastZoom.current = zoom.current;
+      layerRef.current.style.setProperty("--inv-zoom", String(1 / zoom.current));
+      layerRef.current.classList.toggle("is-far", zoom.current < .6);
+    }
     // Only lay out the copies of the map that are on (or near) the screen — at most 4 of the 9, usually
     // 1–2 — so phones aren't rendering ~400 posters. Toggled only when a copy crosses the edge.
     const margin = 300;
@@ -498,7 +507,7 @@ function useInfiniteCanvas(mapMode = false) {
       const near = { x: camera.current.x * zoom.current * .3, y: camera.current.y * zoom.current * .3 };
       depthRef.current.style.backgroundPosition = `${far.x}px ${far.y}px, ${near.x}px ${near.y}px`;
     }
-  }, [tileWidth, tileHeight]);
+  }, [tileWidth, tileHeight, mapMode]);
 
   const stopFrame = useCallback(() => {
     if (frame.current !== null) cancelAnimationFrame(frame.current);
@@ -967,6 +976,7 @@ function MovieExpansion({
   const layerRef = useRef<HTMLDivElement>(null);
   const posterRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const cardRef = useRef<HTMLElement>(null);
   const afterClose = useRef<(() => void) | null>(null);
   const posterAnimation = useRef<Animation | null>(null);
   const [visible, setVisible] = useState(false);
@@ -1027,6 +1037,18 @@ function MovieExpansion({
     void animation.finished.then(finishClose, finishClose);
   }, [finishClose, originTransform]);
 
+  // Phones: swiping the artwork down slides the whole sheet away.
+  const slideClose = useCallback(() => {
+    setVisible(false);
+    const card = cardRef.current;
+    if (!card || window.matchMedia("(prefers-reduced-motion: reduce)").matches) { finishClose(); return; }
+    const from = card.style.transform || "translate3d(0, 0, 0)";
+    card.style.transform = "";
+    const animation = card.animate([{ transform: from }, { transform: "translate3d(0, 100%, 0)" }], { duration: 260, easing: "cubic-bezier(.32,.72,0,1)", fill: "forwards" });
+    void animation.finished.then(finishClose, finishClose);
+  }, [finishClose]);
+  const startSwipe = useSwipeDown(slideClose);
+
   useLayoutEffect(() => {
     const poster = posterRef.current;
     if (!poster) return;
@@ -1070,9 +1092,10 @@ function MovieExpansion({
       onPointerDown={(event) => { if (event.target === event.currentTarget) beginClose(); }}
       ref={layerRef}
     >
-      <section aria-label={`${movie.title} details`} aria-modal="true" className={`movie-focus-card ${showTrailer && detail?.trailerKey ? "is-playing" : ""}`} role="dialog">
+      <section aria-label={`${movie.title} details`} aria-modal="true" className={`movie-focus-card ${showTrailer && detail?.trailerKey ? "is-playing" : ""}`} ref={cardRef} role="dialog">
         <button aria-label="Close title details" className="movie-focus-close" onClick={() => beginClose()} ref={closeRef} type="button"><X aria-hidden="true" /></button>
-        <div className="movie-focus-visual" ref={posterRef}>
+        <div className="movie-focus-visual" onPointerDown={(event) => { if (window.matchMedia(PHONE_QUERY).matches && !showTrailer) startSwipe(event, cardRef.current); }} ref={posterRef}>
+              <span aria-hidden="true" className="sheet-handle" />
               {showTrailer && detail?.trailerKey && !videoReady ? (
                 <div className="trailer-standby" aria-hidden="true"><Play /></div>
               ) : showTrailer && detail?.trailerKey ? (
@@ -1142,6 +1165,15 @@ function MovieExpansion({
                   </section>
                 </>
               ) : null}
+              {/* Phones: the main actions stay pinned along the bottom edge while you scroll. */}
+              {movie.id > 0 ? (
+                <div className="focus-actions-bar">
+                  <button className="similar-button" type="button" onClick={() => beginClose(() => onFindSimilar(movie))}><Orbit aria-hidden="true" /> Find similar</button>
+                  <button aria-pressed={saved} className={`save-button ${saved ? "is-saved" : ""}`} onClick={() => { haptic(); toggleSaved(movie); }} type="button">
+                    {saved ? <BookmarkCheck aria-hidden="true" /> : <Bookmark aria-hidden="true" />} {saved ? "Saved" : "Save"}
+                  </button>
+                </div>
+              ) : null}
         </div>
       </section>
     </div>
@@ -1168,6 +1200,252 @@ function CreditsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
 // Draws a line from the title in focus to each similar title. Lines fade with each ring outward
 // (weaker matches); outer-orbit titles link back to the close match that led to them.
 // Hovering a poster reveals why it is on the map.
+// The window size, read so the server render and the first client render agree (a 1280×800 stand-in on
+// the server), then kept current on resize. Used where layout maths depends on the screen size.
+const subscribeResize = (onChange: () => void) => {
+  window.addEventListener("resize", onChange);
+  return () => window.removeEventListener("resize", onChange);
+};
+const SERVER_VIEWPORT = "1280x800";
+function useViewportSize() {
+  const size = useSyncExternalStore(subscribeResize, () => `${window.innerWidth}x${window.innerHeight}`, () => SERVER_VIEWPORT);
+  const [width, height] = size.split("x").map(Number);
+  return { width, height };
+}
+
+// Phone layout (≤650px wide). Read through useSyncExternalStore so the server render (no window) and the
+// first client render agree, then it follows the real width.
+const PHONE_QUERY = "(max-width: 650px)";
+const subscribePhone = (onChange: () => void) => {
+  const query = window.matchMedia(PHONE_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+};
+function useIsPhone() {
+  return useSyncExternalStore(subscribePhone, () => window.matchMedia(PHONE_QUERY).matches, () => false);
+}
+
+// Follow a downward drag on `handle` and slide `sheet` with it. Let go past the threshold (or flick) to
+// dismiss; otherwise it springs back. Small movements stay taps, so buttons inside keep working.
+function useSwipeDown(onDismiss: () => void) {
+  return (event: ReactPointerEvent<HTMLElement>, sheet: HTMLElement | null) => {
+    if (!sheet || event.button > 0) return;
+    const startY = event.clientY;
+    const startTime = performance.now();
+    let dy = 0;
+    let dragging = false;
+    const move = (moveEvent: PointerEvent) => {
+      dy = Math.max(0, moveEvent.clientY - startY);
+      if (!dragging && dy > 8) { dragging = true; sheet.style.transition = "none"; }
+      if (dragging) sheet.style.transform = `translate3d(0, ${dy}px, 0)`;
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      if (!dragging) return;
+      // Swallow the click that follows a drag so it doesn't press whatever was under the finger.
+      const swallow = (clickEvent: MouseEvent) => { clickEvent.stopPropagation(); clickEvent.preventDefault(); };
+      window.addEventListener("click", swallow, { capture: true, once: true });
+      window.setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 350);
+      const fast = dy / Math.max(1, performance.now() - startTime) > .6;
+      sheet.style.transition = "";
+      if (dy > 110 || (fast && dy > 30)) onDismiss();
+      else sheet.style.transform = "";
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+}
+
+// Phones: tapping a poster on the map opens this short card first, so you can hop to its map in one tap
+// (or open the full details) without leaving the map.
+function PeekSheet({ movie, seedTitle, onClose, onOpenMap, onDetails }: {
+  movie: MovieCard; seedTitle: string | null; onClose: () => void; onOpenMap: () => void; onDetails: () => void;
+}) {
+  const sheetRef = useRef<HTMLElement>(null);
+  const primaryRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const saved = isSaved(useSaved(), movie);
+  const leaving = useRef(false);
+  const close = useCallback((then?: () => void) => {
+    if (leaving.current) return;
+    leaving.current = true;
+    const sheet = sheetRef.current;
+    if (sheet) sheet.style.transform = "";
+    setOpen(false);
+    window.setTimeout(() => { onClose(); then?.(); }, window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 240);
+  }, [onClose]);
+  const startSwipe = useSwipeDown(() => close());
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => { setOpen(true); primaryRef.current?.focus({ preventScroll: true }); });
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    document.addEventListener("keydown", onKey);
+    return () => { cancelAnimationFrame(frame); document.removeEventListener("keydown", onKey); };
+  }, [close]);
+  const runtime = movie.runtime ? formatRuntime(movie) : null;
+  return (
+    <div className={`peek-layer ${open ? "is-open" : ""}`} onPointerDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+      <section aria-label={`${movie.title}, quick look`} aria-modal="true" className="peek-sheet" onPointerDown={(event) => startSwipe(event, sheetRef.current)} ref={sheetRef} role="dialog">
+        <span aria-hidden="true" className="sheet-handle" />
+        <div className="peek-body">
+          <div className="peek-poster"><PosterArt movie={movie} size="w342" /></div>
+          <div className="peek-copy">
+            <h2>{movie.title}</h2>
+            <p>{[movie.mediaType === "tv" ? "Series" : "Movie", movie.year, movie.genres[0], runtime].filter((part) => part && part !== "—").join(" · ")}</p>
+            <p><Star aria-hidden="true" /> {movie.rating || "New"}{seedTitle ? <span> · Similar to {seedTitle}</span> : null}</p>
+          </div>
+        </div>
+        <div className="peek-actions">
+          <button className="peek-primary" onClick={() => close(onOpenMap)} ref={primaryRef} type="button"><Orbit aria-hidden="true" /> Open its map</button>
+          <button className="peek-secondary" onClick={() => close(onDetails)} type="button">Details</button>
+          <button aria-label={saved ? `Remove ${movie.title} from saved` : `Save ${movie.title}`} aria-pressed={saved} className={`peek-save ${saved ? "is-saved" : ""}`} onClick={() => { haptic(); toggleSaved(movie); }} type="button">
+            {saved ? <BookmarkCheck aria-hidden="true" /> : <Bookmark aria-hidden="true" />}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// Phones: a category is a normal two-column list you scroll down, loading more titles as you go, instead
+// of the drag-around wall (whose sixteen posters repeat in every direction). The first sixteen are the
+// curated picks; after that come TMDB's most popular titles for the category, without repeats.
+function BrowseFeed({ title, subtitle, movies, loading, query, tabs, onOpenMovie, onOpenCredits }: {
+  title: string; subtitle: string; movies: MovieCard[]; loading: boolean;
+  /** "category=anime" or "genres=28", plus the content type. */
+  query: string;
+  tabs: ReactNode;
+  onOpenMovie: (movie: MovieCard, origin: CardOrigin, trigger: HTMLButtonElement) => void;
+  onOpenCredits: () => void;
+}) {
+  const [more, setMore] = useState<MovieCard[]>([]);
+  const [done, setDone] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const page = useRef(0);
+  const busy = useRef(false);
+  const sentinel = useRef<HTMLDivElement>(null);
+  const savedKeys = new Set(useSaved().map(savedKey));
+  const seen = new Set<string>();
+  const shown = [...movies, ...more].filter((movie) => { const key = titleKey(movie); if (seen.has(key)) return false; seen.add(key); return true; });
+  const loadMore = useCallback(async () => {
+    if (busy.current) return;
+    busy.current = true;
+    setFailed(false);
+    try {
+      const next = page.current + 1;
+      const response = await fetch(`/api/browse-feed?${query}&page=${next}`);
+      const data = await response.json() as { movies?: MovieCard[]; hasMore?: boolean };
+      if (!response.ok) throw new Error("feed");
+      page.current = next;
+      setMore((current) => [...current, ...(data.movies ?? [])]);
+      if (!data.hasMore) setDone(true);
+    } catch {
+      setFailed(true);
+    } finally {
+      busy.current = false;
+    }
+  }, [query]);
+  useEffect(() => {
+    const target = sentinel.current;
+    if (!target || loading || done || failed) return;
+    const observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) void loadMore(); }, { rootMargin: "900px 0px" });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [loading, done, failed, loadMore, shown.length]);
+  return (
+    <main className="browse-feed">
+      <header className="canvas-header feed-header">
+        <HomeLogo />
+        <button aria-label="Open credits" className="feed-credits" onClick={onOpenCredits} type="button"><Info aria-hidden="true" /></button>
+      </header>
+      <div className="feed-intro">
+        <h1>{title}</h1>
+        <p>{subtitle}</p>
+      </div>
+      {tabs}
+      <ul aria-busy={loading} className="feed-grid">
+        {loading ? Array.from({ length: 6 }, (_, index) => (
+          <li aria-hidden="true" key={`skeleton-${index}`}><span className="feed-skeleton" /><i className="feed-skeleton-line" /><i className="feed-skeleton-line is-short" /></li>
+        )) : shown.map((movie) => {
+          const saved = savedKeys.has(titleKey(movie));
+          return (
+            <li key={titleKey(movie)}>
+              <button
+                aria-label={`Open ${movie.title}, ${movie.mediaType === "tv" ? "series" : "movie"}, ${movie.year}`}
+                className={`feed-card ${saved ? "is-saved" : ""}`}
+                onClick={(event) => {
+                  const poster = event.currentTarget.querySelector<HTMLElement>(".poster-art") ?? event.currentTarget;
+                  const bounds = poster.getBoundingClientRect();
+                  onOpenMovie(movie, { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height }, event.currentTarget);
+                }}
+                type="button"
+              >
+                <PosterArt movie={movie} size="w342" />
+                <span className="feed-title">{movie.title}</span>
+                <span className="feed-meta">{[movie.mediaType === "tv" ? "Series" : movie.year].filter((part) => part && part !== "—").join("")}{movie.rating ? <> · <Star aria-hidden="true" /> {movie.rating}</> : null}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {!loading ? (
+        <div className="feed-end" ref={sentinel}>
+          {failed ? <button onClick={() => void loadMore()} type="button">Couldn’t load more. Try again</button>
+            : done ? <span>That’s everything in {title}.</span>
+            : <span className="feed-spinner" aria-label="Loading more titles" role="status" />}
+        </div>
+      ) : null}
+    </main>
+  );
+}
+
+// Phones: the main places live in a bottom tab bar, within thumb reach. The top bar keeps only the logo.
+function PhoneTabBar({ view, onMap, onBrowse, onSearch, searchOpen }: {
+  view: View; onMap: () => void; onBrowse: () => void; onSearch: () => void; searchOpen: boolean;
+}) {
+  const count = useSaved().length;
+  const tab = (active: boolean) => `phone-tab ${active ? "is-active" : ""}`;
+  return (
+    <nav aria-label="Main" className="phone-tabs">
+      {view === "home"
+        ? <button aria-current={!searchOpen ? "page" : undefined} className={tab(!searchOpen)} onClick={onMap} type="button"><Orbit aria-hidden="true" /><span>Map</span></button>
+        : <Link className={tab(false)} href="/"><Orbit aria-hidden="true" /><span>Map</span></Link>}
+      {view === "browse"
+        ? <button aria-current={!searchOpen ? "page" : undefined} className={tab(!searchOpen)} onClick={onBrowse} type="button"><LayoutGrid aria-hidden="true" /><span>Browse</span></button>
+        : <Link className={tab(false)} href="/browse"><LayoutGrid aria-hidden="true" /><span>Browse</span></Link>}
+      <button aria-expanded={searchOpen} className={tab(searchOpen)} onClick={onSearch} type="button"><Search aria-hidden="true" /><span>Search</span></button>
+      <button className={tab(false)} onClick={openSavedPanel} type="button">
+        <span className="phone-tab-icon"><Bookmark aria-hidden="true" />{count ? <span className="phone-tab-badge">{count}</span> : null}</span>
+        <span>Saved</span><span className="sr-only">{count ? `, ${count} titles` : ""}</span>
+      </button>
+    </nav>
+  );
+}
+
+// Phones: full-screen search, opened from the tab bar. It stays mounted (hidden) so the tab can focus the
+// field during the tap itself — that's what makes the iPhone keyboard come up straight away.
+function PhoneSearch({ open, session, onClose, onSelect }: { open: boolean; session: number; onClose: () => void; onSelect: (movie: MovieCard) => void }) {
+  return (
+    <div
+      aria-hidden={!open}
+      aria-label="Search titles"
+      aria-modal="true"
+      className={`phone-search ${open ? "is-open" : ""}`}
+      inert={!open}
+      onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
+      role="dialog"
+    >
+      <div className="phone-search-bar">
+        <MovieSearch inputId="phone-search-input" key={session} onSelect={(movie) => { onClose(); onSelect(movie); }} placeholder="Search any movie or series" />
+        <button className="phone-search-cancel" onClick={onClose} type="button">Cancel</button>
+      </div>
+      <p className="phone-search-hint">Pick a title to see what’s most like it.</p>
+    </div>
+  );
+}
+
 function SimilarityLinks({ movies, position, width, height, layer }: {
   movies: MovieCard[];
   position: (index: number) => (typeof CARD_POSITIONS)[number];
@@ -1251,7 +1529,7 @@ const CATEGORY_TABS: Array<{ key: string; name: string; group: string }> = [
   ...CATEGORIES.map((category) => ({ key: category.slug, name: category.name, group: category.group })),
 ];
 
-function CategoryTabs({ activeKey, onPick }: { activeKey: string; onPick: (key: string) => void }) {
+function CategoryTabs({ activeKey, onPick, inline = false }: { activeKey: string; onPick: (key: string) => void; inline?: boolean }) {
   const rowRef = useRef<HTMLDivElement>(null);
   // Keep the active pill in view (centred) whenever it changes.
   useEffect(() => {
@@ -1271,7 +1549,7 @@ function CategoryTabs({ activeKey, onPick }: { activeKey: string; onPick: (key: 
     return () => row.removeEventListener("wheel", wheel);
   }, []);
   return (
-    <nav aria-label="Categories" className="category-tabs">
+    <nav aria-label="Categories" className={`category-tabs ${inline ? "is-inline" : ""}`}>
       <div className="category-tabs-row" ref={rowRef}>
         {CATEGORY_TABS.map((tab, index) => (
           <Fragment key={tab.key}>
@@ -1384,9 +1662,10 @@ function CanvasScreen({
   // camera at (-680, -430) and zoom 1, so the screen centre sits at this point on the tile.
   const dealFrom = (index: number) => {
     const card = CARD_POSITIONS[index % CARD_POSITIONS.length];
-    const origin = typeof window === "undefined" ? { x: 1320, y: 830 } : { x: window.innerWidth / 2 + 680, y: window.innerHeight / 2 + 430 };
+    const origin = { x: viewport.width / 2 + 680, y: viewport.height / 2 + 430 };
     return { x: origin.x - (card.x + card.width / 2), y: origin.y - (card.y + card.width * .75), delay: index * 25 };
   };
+  const viewport = useViewportSize();
   const genreName = category?.name ?? GENRES.find((genre) => genre.id === selectedGenres[0])?.name;
   const genreLines = category
     ? [category.line, "Shuffling the deck…", "Dealing sixteen picks…"]
@@ -1483,7 +1762,7 @@ function CanvasScreen({
                   {mapSeed ? <SimilarityLinks layer="lines" movies={movies} position={mapPosition} width={tileWidth} height={tileHeight} /> : null}
                   {movies.map((movie, index) => (
                     <MovieCardButton
-                      className={movie.orbit ? "is-outer" : ""}
+                      className={movie.orbit ? "is-outer" : mapSeed && index === 0 ? "is-seed" : ""}
                       clone={tileIndex !== 4}
                       enter={mapMode && index && tileIndex === 4 ? burstFrom(index) : undefined}
                       entryHero={entryTransition && tileIndex === 4 && index === 0}
@@ -1547,6 +1826,17 @@ export default function ReelspaceApp({ view = "home", initialPick = null }: {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [creditsOpen, setCreditsOpen] = useState(false);
   const [savedOpen, setSavedOpen] = useState(false);
+  const isPhone = useIsPhone();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchSession, setSearchSession] = useState(0);
+  // Show the search screen and focus its field inside this same tap, so phones raise the keyboard.
+  const openPhoneSearch = () => {
+    haptic();
+    flushSync(() => { setSearchSession((session) => session + 1); setSearchOpen(true); });
+    document.getElementById("phone-search-input")?.focus();
+  };
+  // Phones: the poster tapped on the map, shown in the quick-look sheet before anything else opens.
+  const [peek, setPeek] = useState<{ movie: MovieCard; origin: CardOrigin; trigger: HTMLButtonElement; seedTitle: string } | null>(null);
   useEffect(() => {
     const open = () => setSavedOpen(true);
     window.addEventListener(OPEN_SAVED_EVENT, open);
@@ -1590,6 +1880,7 @@ export default function ReelspaceApp({ view = "home", initialPick = null }: {
     setSelectedMovie(null);
     setSelectedOrigin(null);
     setDetail(null);
+    setPeek(null);
     try {
       // A short floor keeps the hand-off readable when the answer is already cached.
       const [response] = await Promise.all([
@@ -1663,7 +1954,7 @@ export default function ReelspaceApp({ view = "home", initialPick = null }: {
     const entry = mapHistory[index - historyBase.current];
     if (!entry) return false;
     mapRequest.current?.abort();
-    setPending(null); setMapBusy(false);
+    setPending(null); setMapBusy(false); setPeek(null);
     setMapSeed(entry.seed); setMovies(entry.movies); setConfigured(entry.configured); setPhase(entry.phase);
     setMapHistory((history) => history.slice(0, index - historyBase.current)); setMapError(null);
     return true;
@@ -1696,6 +1987,10 @@ export default function ReelspaceApp({ view = "home", initialPick = null }: {
     window.addEventListener("popstate", listener);
     return () => window.removeEventListener("popstate", listener);
   }, []);
+  // Phones browse a category as a scrolling list (see BrowseFeed) instead of the drag-around wall.
+  const feedMode = view === "browse" && isPhone && phase === "canvas" && !mapSeed;
+  const browsePick = selectedCategory ?? String(selectedGenres[0]);
+  const feedType = findCategory(selectedCategory)?.media ?? contentType;
   // Nothing on the homepage yet and the load failed: show the full-screen error instead of the loader.
   const homeFailed = view === "home" && !mapSeed && !pending && Boolean(mapError);
   const sharedHomeTitle = homeFailed && Number(new URLSearchParams(window.location.search).get("id")) > 0;
@@ -1945,8 +2240,21 @@ export default function ReelspaceApp({ view = "home", initialPick = null }: {
           setSelectedMoods={setSelectedMoods}
         />
       ) : null}
+      {feedMode ? (
+        <BrowseFeed
+          key={`feed:${browsePick}:${feedType}:${selectedMoods.join("-")}`}
+          loading={recommendationsLoading}
+          movies={movies}
+          onOpenCredits={() => setCreditsOpen(true)}
+          onOpenMovie={(movie, origin, trigger) => { void openMovie(movie, origin, trigger).catch(() => undefined); }}
+          query={`${selectedCategory ? `category=${encodeURIComponent(selectedCategory)}` : `genres=${selectedGenres[0]}`}&type=${feedType}`}
+          subtitle={[selectedMoods.length ? selectedMoods.map((slug) => MOODS.find((mood) => mood.slug === slug)?.name).filter(Boolean).join(" + ") : null, feedType === "movie" ? "Movies" : feedType === "tv" ? "Series" : "Movies and series"].filter(Boolean).join(" · ")}
+          tabs={<CategoryTabs activeKey={browsePick} inline onPick={(key) => { window.scrollTo({ top: 0 }); openBrowse(key, undefined, "replace"); }} />}
+          title={browsePickName(browsePick) ?? "Picks"}
+        />
+      ) : null}
       {/* Outside the canvas screen so it keeps its scroll position while results change. */}
-      {view === "browse" && phase === "canvas" && !mapSeed ? (
+      {view === "browse" && phase === "canvas" && !mapSeed && !feedMode ? (
         <CategoryTabs
           activeKey={selectedCategory ?? String(selectedGenres[0])}
           onPick={(key) => openBrowse(key, undefined, "replace")}
@@ -1960,7 +2268,7 @@ export default function ReelspaceApp({ view = "home", initialPick = null }: {
           onTrending={() => { setMapError(null); void showTrending(false); }}
           sharedTitle={sharedHomeTitle}
         />
-      ) : phase === "canvas" ? (
+      ) : phase === "canvas" && !feedMode ? (
         <CanvasScreen
           // Prefixed so it can never collide with the details panel's key (same title id) — siblings
           // sharing a key made React lose track of the map and stack fresh copies on every update.
@@ -1974,7 +2282,10 @@ export default function ReelspaceApp({ view = "home", initialPick = null }: {
           movies={pending ? (pending.seed ? [pending.seed] : []) : movies}
           onChangeTaste={showAllCategories}
           onOpenCredits={() => setCreditsOpen(true)}
-          onOpenMovie={(movie, origin, trigger) => { void openMovie(movie, origin, trigger).catch(() => undefined); }}
+          onOpenMovie={(movie, origin, trigger) => {
+            if (isPhone && mapSeed && titleKey(movie) !== titleKey(mapSeed)) { setPeek({ movie, origin, trigger, seedTitle: mapSeed.title }); return; }
+            void openMovie(movie, origin, trigger).catch(() => undefined);
+          }}
           selectedGenres={selectedGenres}
           selectedMoods={selectedMoods}
           selectedContentType={findCategory(selectedCategory)?.media ?? contentType}
@@ -2005,6 +2316,28 @@ export default function ReelspaceApp({ view = "home", initialPick = null }: {
           origin={selectedOrigin}
           selected={selectedMovie}
         />
+      ) : null}
+      {peek ? (
+        <PeekSheet
+          key={`peek:${titleKey(peek.movie)}`}
+          movie={peek.movie}
+          onClose={() => setPeek(null)}
+          onDetails={() => { void openMovie(peek.movie, peek.origin, peek.trigger).catch(() => undefined); }}
+          onOpenMap={() => exploreMap(peek.movie)}
+          seedTitle={peek.seedTitle}
+        />
+      ) : null}
+      {isPhone ? (
+        <>
+          <PhoneSearch onClose={() => setSearchOpen(false)} onSelect={exploreMap} open={searchOpen} session={searchSession} />
+          <PhoneTabBar
+            onBrowse={() => { setSearchOpen(false); if (phase === "canvas") showAllCategories(); else window.scrollTo({ top: 0, behavior: "smooth" }); }}
+            onMap={() => { setSearchOpen(false); goHome(); }}
+            onSearch={() => { if (searchOpen) setSearchOpen(false); else openPhoneSearch(); }}
+            searchOpen={searchOpen}
+            view={view}
+          />
+        </>
       ) : null}
       <CreditsDialog onOpenChange={setCreditsOpen} open={creditsOpen} />
       <SavedDialog onOpenChange={setSavedOpen} onPick={(movie) => { setSavedOpen(false); exploreMap(movie); }} open={savedOpen} />
